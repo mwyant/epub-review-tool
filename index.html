@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EPUB Review Player</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg-primary: #1a1a2e; --bg-secondary: #16213e; --bg-tertiary: #0f3460;
+            --text-primary: #e8e8e8; --text-secondary: #a0a0a0;
+            --accent: #e94560; --highlight: #ffd700; --highlight-bg: rgba(255, 215, 0, 0.25);
+            --panel-bg: #1f1f3a; --border: #3a3a5c;
+        }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg-primary); color: var(--text-primary); height: 100vh; overflow: hidden; }
+        .header { background: var(--bg-secondary); padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); gap: 16px; }
+        .header-left, .header-right { display: flex; align-items: center; gap: 16px; }
+        h1 { font-size: 18px; font-weight: 600; color: var(--text-primary); }
+        .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: all 0.2s; display: flex; align-items: center; gap: 6px; }
+        .btn-primary { background: var(--accent); color: white; }
+        .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); }
+        .main-container { display: flex; height: calc(100vh - 60px); }
+        .content-area { flex: 0 0 60%; display: flex; flex-direction: column; border-right: 1px solid var(--border); min-width: 0; }
+        .marks-panel { flex: 0 0 40%; background: var(--panel-bg); display: flex; flex-direction: column; transition: flex 0.3s ease; overflow: hidden; }
+        .marks-panel.collapsed { flex: 0 0 48px; }
+        .marks-header { padding: 12px 16px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+        .marks-count { background: var(--accent); color: white; padding: 2px 8px; border-radius: 10px; font-size: 12px; margin-left: 8px; }
+        .marks-content { flex: 1; overflow-y: auto; padding: 12px; }
+        .mark-item { background: var(--bg-secondary); border-radius: 8px; padding: 12px; margin-bottom: 10px; cursor: pointer; border: 1px solid var(--border); }
+        .mark-item:hover { border-color: var(--accent); }
+        .mark-time { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+        .mark-prev { color: var(--text-secondary); font-size: 13px; font-style: italic; }
+        .mark-current { color: var(--text-primary); font-size: 14px; font-weight: 500; }
+        .controls-bar { background: var(--bg-secondary); padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+        .control-group { display: flex; align-items: center; gap: 10px; }
+        .control-label { font-size: 13px; color: var(--text-secondary); }
+        select, input[type="text"] { background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border); padding: 6px 10px; border-radius: 6px; font-size: 14px; }
+        .speed-slider { width: 100px; accent-color: var(--accent); }
+        .reader-area { flex: 1; overflow-y: auto; padding: 40px; line-height: 1.8; font-size: 18px; }
+        .reader-content { max-width: 800px; margin: 0 auto; }
+        .sentence { padding: 2px 4px; border-radius: 3px; cursor: pointer; }
+        .sentence.playing { background: var(--highlight-bg); color: var(--highlight); font-weight: 500; }
+        .sentence.active { background: rgba(255, 255, 255, 0.1); }
+        .review-para { margin-bottom: 1.2em; text-indent: 1.5em; }
+        .review-para:first-of-type { text-indent: 0; }
+        .review-header { color: var(--highlight); margin: 1.5em 0 0.5em 0; text-align: center; font-size: 1.5em; }
+        .controller-status { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 6px 12px; background: var(--bg-tertiary); border-radius: 6px; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #666; }
+        .status-dot.connected { background: #4ade80; }
+        .collapse-btn { background: transparent; border: none; color: var(--text-primary); cursor: pointer; font-size: 18px; }
+        .resume-modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .resume-box { background: var(--bg-secondary); padding: 30px; border-radius: 12px; text-align: center; max-width: 400px; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <h1>EPUB Review Player</h1>
+            <input type="file" id="fileInput" accept=".epub" hidden>
+            <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">📖 Open EPUB</button>
+        </div>
+        <div class="header-right">
+            <button class="btn btn-secondary" onclick="exportJSON()">JSON</button>
+            <button class="btn btn-secondary" onclick="exportCSV()">CSV</button>
+        </div>
+    </header>
+
+    <div class="main-container">
+        <div class="content-area">
+            <div class="controls-bar">
+                <div class="control-group">
+                    <span class="control-label">Chapter:</span>
+                    <select id="chapterSelect" onchange="jumpToChapter(this.value)"><option value="">-</option></select>
+                </div>
+                <div class="control-group">
+                    <span class="control-label">Voice:</span>
+                    <select id="voiceSelect" onchange="updateVoice(this.value)"><option value="">Loading...</option></select>
+                </div>
+                <div class="control-group">
+                    <span class="control-label">Speed:</span>
+                    <input type="range" class="speed-slider" id="speedSlider" min="0.5" max="2" step="0.1" value="1" oninput="updateSpeed(this.value)">
+                    <span id="speedValue">1.0x</span>
+                </div>
+                <div class="control-group">
+                    <button class="btn btn-secondary" onclick="togglePlay()" id="playBtn">▶</button>
+                    <button class="btn btn-secondary" onclick="stopPlayback()">⏹</button>
+                </div>
+                <div class="controller-status">
+                    <div class="status-dot" id="gamepadDot"></div>
+                    <span id="gamepadStatus">No Controller</span>
+                </div>
+            </div>
+            <div class="reader-area" id="readerArea">
+                <div class="reader-content" id="readerContent"></div>
+            </div>
+        </div>
+        <div class="marks-panel" id="marksPanel">
+            <div class="marks-header">
+                <div style="display:flex; align-items:center;">
+                    <strong>Marks</strong><span class="marks-count" id="marksCount">0</span>
+                </div>
+                <button class="collapse-btn" onclick="toggleMarksPanel()">◀</button>
+            </div>
+            <div class="marks-content" id="marksContent"></div>
+        </div>
+    </div>
+
+    <div id="resumeModal" class="resume-modal hidden">
+        <div class="resume-box">
+            <h3>Resume Session?</h3>
+            <p style="margin: 15px 0; color: var(--text-secondary);">Found saved progress for this book.</p>
+            <div style="display:flex; gap:10px; justify-content:center;">
+                <button class="btn btn-secondary" onclick="closeResume(false)">Start Fresh</button>
+                <button class="btn btn-primary" onclick="closeResume(true)">Resume</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        console.log("Script starting...");
+        let book, chapters = [], sentences = [], currentSentenceIndex = -1, isPlaying = false;
+        let speechSynthesis = window.speechSynthesis, selectedVoice = null, currentUtterance = null;
+        let marks = [], currentBookHash = '', currentChapterIndex = 0;
+        const STORAGE_KEY = 'epub_player_marks', BOOK_KEY = 'epub_player_book';
+
+        let lastMarkTime = 0; // For debouncing controller
+
+        document.getElementById('fileInput').addEventListener('change', handleFileSelect);
+
+        async function handleFileSelect(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            console.log("File selected:", file.name);
+            try {
+                const buffer = await file.arrayBuffer();
+                currentBookHash = await hashString(file.name + buffer.byteLength);
+                console.log("Book hash:", currentBookHash);
+                const saved = localStorage.getItem(BOOK_KEY);
+                if (saved === currentBookHash && localStorage.getItem(STORAGE_KEY)) {
+                    document.getElementById('resumeModal').classList.remove('hidden');
+                    window.pendingBuffer = buffer;
+                } else {
+                    loadEPUB(buffer);
+                }
+            } catch (err) {
+                console.error("Error in handleFileSelect:", err);
+            }
+        }
+
+        function closeResume(resume) {
+            document.getElementById('resumeModal').classList.add('hidden');
+            if (resume) {
+                const data = JSON.parse(localStorage.getItem(STORAGE_KEY));
+                marks = data.marks || [];
+                updateMarksDisplay();
+            } else {
+                marks = [];
+                localStorage.removeItem(STORAGE_KEY);
+            }
+            loadEPUB(window.pendingBuffer);
+        }
+
+        async function hashString(str) {
+            try {
+                if (window.crypto && window.crypto.subtle) {
+                    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+                    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('').slice(0,16);
+                }
+            } catch (e) { console.warn("Crypto failed, using fallback"); }
+            let h = 5381; for (let i=0; i<str.length; i++) h = (h * 33) ^ str.charCodeAt(i);
+            return (h >>> 0).toString(16);
+        }
+
+        async function loadEPUB(buffer) {
+            console.log("Loading EPUB...");
+            try {
+                stopPlayback();
+                book = ePub(buffer);
+                await book.ready;
+                console.log("Book ready");
+                const spine = book.spine;
+                chapters = []; sentences = []; let sentIdx = 0;
+                const select = document.getElementById('chapterSelect');
+                select.innerHTML = '';
+
+                for (let i=0; i<spine.length; i++) {
+                    const item = spine.get(i);
+                    let doc; try { doc = await book.load(item.href); } catch(e) { console.warn("Failed to load item", item.href); continue; }
+                    const chapterDoc = (typeof doc === 'string') ? new DOMParser().parseFromString(doc, 'text/html') : doc;
+                    const blocks = chapterDoc.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, li, blockquote');
+                    const chapterSentences = [];
+                    let paraIdx = 0;
+
+                    blocks.forEach(block => {
+                        const text = block.textContent.trim();
+                        if (text.length > 0) {
+                            const sents = text.split(/(?<=[.!?])\s+/).filter(s => s.trim());
+                            sents.forEach(s => {
+                                const obj = { text: s.trim(), index: sentIdx++, chapterIndex: chapters.length, paragraphIndex: paraIdx, isHeader: /^H[1-6]$/.test(block.tagName) };
+                                chapterSentences.push(obj);
+                                sentences.push(obj);
+                            });
+                            paraIdx++;
+                        }
+                    });
+
+                    if (chapterSentences.length > 0) {
+                        chapters.push({ name: item.idref || `Chapter ${chapters.length+1}`, sentences: chapterSentences });
+                        const opt = document.createElement('option'); opt.value = chapters.length-1; opt.textContent = chapters[chapters.length-1].name;
+                        select.appendChild(opt);
+                    }
+                }
+                localStorage.setItem(BOOK_KEY, currentBookHash);
+                console.log("EPUB loaded,", chapters.length, "chapters,", sentences.length, "sentences");
+                renderChapter(0);
+            } catch (err) {
+                console.error("Error loading EPUB:", err);
+                alert("Error loading EPUB: " + err.message);
+            }
+        }
+
+        function renderChapter(idx) {
+            currentChapterIndex = parseInt(idx);
+            const container = document.getElementById('readerContent');
+            const chapter = chapters[currentChapterIndex];
+            if (!chapter) return;
+            let html = `<div class="chapter-title">${chapter.name}</div><div class="review-content">`;
+            let curPara = -1;
+            chapter.sentences.forEach(s => {
+                if (s.paragraphIndex !== curPara) {
+                    if (curPara !== -1) html += '</p>';
+                    html += s.isHeader ? '<h3 class="review-header">' : '<p class="review-para">';
+                    curPara = s.paragraphIndex;
+                }
+                html += `<span class="sentence" data-index="${s.index}" onclick="jumpToSentence(${s.index})">${s.text}</span> `;
+            });
+            html += '</p></div>';
+            container.innerHTML = html;
+            document.getElementById('chapterSelect').value = currentChapterIndex;
+        }
+
+        function togglePlay() { isPlaying ? pausePlayback() : startPlayback(); }
+        function startPlayback() {
+            if (sentences.length === 0) return;
+            isPlaying = true; document.getElementById('playBtn').textContent = '⏸';
+            if (currentSentenceIndex < 0) currentSentenceIndex = chapters[currentChapterIndex].sentences[0].index;
+            speakSentence(currentSentenceIndex);
+        }
+        function pausePlayback() { isPlaying = false; document.getElementById('playBtn').textContent = '▶'; speechSynthesis.cancel(); }
+        function stopPlayback() { pausePlayback(); currentSentenceIndex = -1; clearHighlights(); }
+
+        function speakSentence(idx) {
+            if (!isPlaying || idx >= sentences.length) { stopPlayback(); return; }
+            currentSentenceIndex = idx;
+            const s = sentences[idx];
+            if (s.chapterIndex !== currentChapterIndex) renderChapter(s.chapterIndex);
+            
+            clearHighlights();
+            const el = document.querySelector(`.sentence[data-index="${idx}"]`);
+            if (el) { 
+                el.classList.add('playing'); 
+                const area = document.getElementById('readerArea');
+                const rect = el.getBoundingClientRect();
+                const areaRect = area.getBoundingClientRect();
+                if (rect.top < areaRect.top || rect.bottom > areaRect.bottom) {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
+
+            currentUtterance = new SpeechSynthesisUtterance(s.text);
+            if (selectedVoice) currentUtterance.voice = selectedVoice;
+            currentUtterance.rate = parseFloat(document.getElementById('speedSlider').value);
+            currentUtterance.onend = () => { if (isPlaying) speakSentence(idx + 1); };
+            currentUtterance.onerror = (e) => { 
+                console.error('Speech error:', e); 
+                if (isPlaying) speakSentence(idx + 1); 
+            };
+            speechSynthesis.speak(currentUtterance);
+        }
+
+        function clearHighlights() { document.querySelectorAll('.sentence').forEach(el => el.classList.remove('playing', 'active')); }
+        
+        function jumpToSentence(idx) { 
+            const wasPlaying = isPlaying;
+            stopPlayback(); 
+            const s = sentences[idx];
+            if (s.chapterIndex !== currentChapterIndex) renderChapter(s.chapterIndex);
+            currentSentenceIndex = idx;
+            setTimeout(() => {
+                const el = document.querySelector(`.sentence[data-index="${idx}"]`);
+                if (el) { el.classList.add('active'); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+                if (wasPlaying) startPlayback();
+            }, 50);
+        }
+        
+        function jumpToChapter(idx) { 
+            const wasPlaying = isPlaying;
+            stopPlayback(); 
+            renderChapter(idx); 
+            currentSentenceIndex = chapters[idx].sentences[0].index; 
+            if (wasPlaying) startPlayback();
+        }
+        
+        function updateSpeed(v) { 
+            document.getElementById('speedValue').textContent = v + 'x'; 
+            if (currentUtterance) currentUtterance.rate = parseFloat(v);
+        }
+        
+        function toggleMarksPanel() { 
+            const p = document.getElementById('marksPanel'); p.classList.toggle('collapsed');
+            p.querySelector('.collapse-btn').textContent = p.classList.contains('collapsed') ? '▶' : '◀';
+        }
+
+        function addMark() {
+            const now = Date.now();
+            if (now - lastMarkTime < 1000) return; // 1s debounce
+            lastMarkTime = now;
+
+            if (currentSentenceIndex < 0) return;
+            const cur = sentences[currentSentenceIndex];
+            const prev = currentSentenceIndex > 0 ? sentences[currentSentenceIndex-1] : null;
+            const mark = { time: new Date().toLocaleTimeString(), chapter: chapters[cur.chapterIndex].name, index: cur.index, 
+                           prev: prev ? prev.text : '', text: cur.text };
+            marks.push(mark);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({ marks }));
+            updateMarksDisplay();
+            console.log("Mark added at", mark.time);
+        }
+
+        function updateMarksDisplay() {
+            const count = document.getElementById('marksCount'), content = document.getElementById('marksContent');
+            count.textContent = marks.length;
+            content.innerHTML = marks.map(m => `
+                <div class="mark-item" onclick="jumpToSentence(${m.index})">
+                    <div class="mark-time"><span>${m.time}</span> • <span>${m.chapter}</span></div>
+                    <div class="mark-prev">"${m.prev}"</div>
+                    <div class="mark-current">"${m.text}"</div>
+                </div>
+            `).join('');
+        }
+
+        function exportJSON() {
+            const blob = new Blob([JSON.stringify(marks, null, 2)], { type: 'application/json' });
+            const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'marks.json'; a.click();
+        }
+        function exportCSV() {
+            const csv = "Time,Chapter,Previous,Current\n" + marks.map(m => `"${m.time}","${m.chapter}","${m.prev.replace(/"/g,'""')}","${m.text.replace(/"/g,'""')}"`).join("\n");
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'marks.csv'; a.click();
+        }
+
+        function loadVoices() {
+            const v = speechSynthesis.getVoices(); if (v.length === 0) { return; }
+            const select = document.getElementById('voiceSelect'); select.innerHTML = '';
+            const ens = v.filter(x => x.lang.startsWith('en'));
+            ens.forEach(x => { const o = document.createElement('option'); o.value = x.name; o.textContent = x.name; select.appendChild(o); });
+            selectedVoice = ens.find(x => x.name.includes('Natural')) || ens[0];
+            if (selectedVoice) select.value = selectedVoice.name;
+        }
+        function updateVoice(name) { selectedVoice = speechSynthesis.getVoices().find(x => x.name === name); }
+        speechSynthesis.onvoiceschanged = loadVoices; 
+        loadVoices();
+        setTimeout(loadVoices, 500); // Robustness for async voice loading
+
+        setInterval(() => {
+            const pads = navigator.getGamepads();
+            for (const gp of pads) {
+                if (gp && (gp.buttons[0].pressed || gp.buttons[7].pressed)) { addMark(); break; }
+            }
+            const dot = document.getElementById('gamepadDot'), status = document.getElementById('gamepadStatus');
+            const any = Array.from(pads).some(x => x);
+            dot.className = 'status-dot' + (any ? ' connected' : '');
+            status.textContent = any ? 'Xbox Connected' : 'No Controller';
+        }, 150);
+    </script>
+</body>
+</html>

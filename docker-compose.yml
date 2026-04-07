@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  epub-player:
+    build: .
+    container_name: epub-review-player
+    ports:
+      - "8002:8002"
+    restart: unless-stopped
